@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# pull ansible repo and run playbooks if repo changed
+# repo should be checkouted locally
+# force run: ansible-cron force
+# run from cron: ansible-cron
+
+cd /home/ans/repo
+
+# Check lock file - if exists then exit. Prevent running multiple ansible instances
+if kill -0 $(cat /tmp/ansible_run.lock 2> /dev/null) &> /dev/null
+then
+  echo "Ansible is already running. Please wait or kill running instance."
+  exit 0
+fi
+# Create lock file
+echo $$ > /tmp/ansible_run.lock
+
+echo "starting to fetch"
+if timeout 60 git fetch -v origin || timeout 60 git fetch -v origin || timeout 60 git fetch -v origin
+then
+  echo "fetch done"
+  commits=$(git log HEAD..origin/master --oneline | wc -l)
+  if [ "_$commits" == "_0" ] && [ "_$1" != "_force" ] && (cat /tmp/ansible_status | grep ok >/dev/null)
+  then
+    # repo did not change and script is run via crontab
+    # update timestamp of status file to allow monitoring to check when this script run last time
+    # return to 
+    touch /tmp/ansible_status
+  else
+    # smth changed or script is running manually -> git pull and run playbook
+    timeout 120 git pull --rebase
+    cd playbook
+    export ANSIBLE_LOG_PATH=/var/log/ansible.log
+    ansible-playbook main.yml
+    if [ $? -eq 0 ]
+    then
+      echo "ok" | tee /tmp/ansible_status
+    else
+      echo "failed" | tee /tmp/ansible_status
+    fi
+  fi
+else
+  # git pull failed for some reason. alarming
+  echo "fetch failed" | tee /tmp/ansible_status
+fi
+
+# Remove lock
+rm -f /tmp/ansible_run.lock
